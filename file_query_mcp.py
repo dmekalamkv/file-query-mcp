@@ -54,12 +54,15 @@ def list_data_files(path: str) -> str:
         Creates/updates 'data_files.json' with file catalog information
     """
     data_files = {}
+    if os.path.exists("schema_descriptions.json"):
+        with open("schema_descriptions.json", "w") as f:
+            f.write("{}")  # Reset schema cache
     
     # Walk through directory tree to find data files
     for root, dirs, files in os.walk(path):
         for file in files:
             # Check for supported file extensions
-            if file.endswith(('.csv', '.json', '.xlsx', '.paraquet')):
+            if file.endswith(('.csv', '.json', '.xlsx', '.parquet')):
                 # Create sanitized table name (replace special chars with underscores)
                 file_name = file.replace('.', '_').replace('-', '_')
                 file_table_name = f"_{file_name}"
@@ -93,7 +96,16 @@ def list_file_schema(file_names_list: list) -> str:
         file_names_list: List of file names to analyze
         
     Returns:
-        String containing formatted schema information for all files
+        String containing formatted schema information for all files along with possible files that threw an error if the
+        schema inference failed.
+    
+    Dealing with files that throw errors and might need manual correction and not an override:
+    - If a file cannot be read or its schema cannot be inferred, the error message will be included in the output.
+    - A preview of the first 500 characters of the file will be provided to help with schema inference and override.
+    - **Use this data to clearly point out how to correct the data file if you believe you have enough information about the error**
+    - ask the user if he wants to correct the files and then detail how to corerct them.
+    
+    
         
 
     """
@@ -128,18 +140,22 @@ def list_file_schema(file_names_list: list) -> str:
                 # Load file based on extension using Polars
                 if file.endswith('.csv'):
                     df = pl.read_csv(path)
+                    con.register(table_name, df)
                 elif file.endswith('.json'):
                     df = pl.read_json(path)
+                    con.register(table_name, df)
                 elif file.endswith('.xlsx'):
                     df = pl.read_excel(path)
+                    con.register(table_name, df)
                 elif file.endswith('.parquet'):
                     df = pl.read_parquet(path)
+                    con.register(table_name, df)
                 else:
                     schema_descriptions["file"] = f"Unsupported file format for {file}.\n"
                     continue
                 
                 # Register dataframe with DuckDB for SQL querying
-                con.register(table_name, df)
+                #con.register(table_name, df)
                 
                 # Generate comprehensive schema description
                 schema_descriptions[file] = f"""
@@ -226,17 +242,22 @@ def load_override_schema(schema_json: FileSchemaOverride) -> str:
         # Load file with custom schema based on file type
         if schema_json.file_name.endswith('.csv'):
             df = pl.read_csv(path, dtypes=schema_override)
+            con.register(table_name, df)
         elif schema_json.file_name.endswith('.json'):
             df = pl.read_json(path, dtypes=schema_override)
+            con.register(table_name, df)
         elif schema_json.file_name.endswith('.xlsx'):
             df = pl.read_excel(path, dtypes=schema_override)
+            con.register(table_name, df)
         elif schema_json.file_name.endswith('.parquet'):
             df = pl.read_parquet(path, dtypes=schema_override)
+            con.register(table_name, df)
         else:
             return f"Error: Unsupported file format for {schema_json.file_name}."
         
         # Register with DuckDB
-        con.register(table_name, df)
+        #con.register(table_name, df)
+        
         
         # Update schema description with override information
         schema_descriptions[schema_json.file_name] = f"""
@@ -263,10 +284,28 @@ def load_override_schema(schema_json: FileSchemaOverride) -> str:
 def query_files(raw_query: str) -> str:
     """Execute SQL queries against loaded data files
         
-    Args:
-        raw_query: SQL query string with file names or paths as table references
-                  Example: "SELECT * FROM mydata.csv WHERE column1 > 100"
-        
+
+
+        ### **Args**
+
+        * `raw_query` *(str)*:
+        SQL query string where **file names (with extensions)** or paths are used as **table names**.
+
+        **Important:**
+        Table names **must exactly match** the full file names, **including file extensions** (e.g., `.csv`, `.parquet`, `.json`).
+        use a simple aliasing convention to avoid issues with special characters.
+
+        Valid:
+        `"SELECT * FROM sales_data.csv sd WHERE revenue > 1000"`
+        'SELECT oi.inventory_item_id, COUNT(*) as order_count FROM order_items.csv oi GROUP BY inventory_item_id ORDER BY order_count DESC LIMIT 5'
+
+        Invalid:
+        `"SELECT * FROM sales_data"`  *(missing `.csv`)*
+
+        This ensures proper mapping between SQL table references and actual files.
+
+
+    
     Returns:
         String representation of query results or error message
         
